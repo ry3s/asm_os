@@ -1,9 +1,13 @@
-     1                                      BOOT_LOAD equ 0x7C00        ; ブートプログラムのロード位置
-     2                                      ORG BOOT_LOAD               ; ロードアドレスをアセンブラに指示
+     1                                  ;;;
+     2                                  ;;; マクロ
      3                                  ;;;
-     4                                  ;;; マクロ
-     5                                  ;;;
-     6                                      %include "../include/macros.s"
+     4                                      %include "../include/define.s"
+     1                              <1>     BOOT_LOAD equ 0x7C00
+     2                              <1> 
+     3                              <1>     BOOT_SIZE equ (1024 * 8)
+     4                              <1>     SECT_SIZE equ (512)
+     5                              <1>     BOOT_SECT equ (BOOT_SIZE / SECT_SIZE)
+     5                                      %include "../include/macros.s"
      1                              <1> %macro cdecl 1-*.nolist
      2                              <1>     %rep %0 - 1
      3                              <1>     push %{-1:-1}
@@ -16,7 +20,16 @@
     10                              <1>     add sp, (__BITS__ >> 3) * (%0 - 1)
     11                              <1>     %endif
     12                              <1> %endmacro
-     7                                  
+    13                              <1> 
+    14                              <1> ;;; drive parameter
+    15                              <1>     struc drive
+    16 00000000 <res 00000002>      <1>         .no resw 1                  ; dirve number
+    17 00000002 <res 00000002>      <1>         .cyln resw 1                ; cylinder
+    18 00000004 <res 00000002>      <1>         .head resw 1                ; head
+    19 00000006 <res 00000002>      <1>         .sect resw 1                ; sector
+    20                              <1>     endstruc
+     6                                  
+     7                                      ORG BOOT_LOAD               ; ロードアドレスをアセンブラに指示
      8                                  ;;;
      9                                  ;;; エントリポイント
     10                                  ;;;
@@ -38,49 +51,54 @@
     26                                  
     27 00000067 FB                          sti                        ; 割り込み許可
     28                                  
-    29 00000068 8816[B800]                  mov [BOOT.DRIVE], dl       ; ブートドライブを保存
+    29 00000068 8816[B800]                  mov [BOOT + drive.no], dl       ; ブートドライブを保存
     30                                  
     31                                      ;; 文字を表示
-    32 0000006C 68[9800]E8480083C4-         cdecl puts, .s0             ; puts(.s0);
+    32 0000006C 68[9900]E84E0083C4-         cdecl puts, .s0             ; puts(.s0);
     32 00000074 02                 
     33                                  
-    34                                      ;; 次の 512 バイトを読み込む
-    35 00000075 B402                        mov ah, 0x02                ; AH = 読み込み命令
-    36 00000077 B001                        mov al, 1                   ; AL = 読み込みセクタ数
-    37 00000079 B90200                      mov cx, 0x0002              ; CX = シリンダ/セクタ
-    38 0000007C B600                        mov dh, 0x00                ; DH = ヘッド位置
-    39 0000007E 8A16[B800]                  mov dl, [BOOT.DRIVE]        ; DL = ドライブ番号
-    40 00000082 BB007E                      mov bx, 0x7C00 + 512        ; BX = オフセット
-    41 00000085 CD13                        int 0x13                    ;
-    42                                                                  ;
-    43                                      .10Q:                       ;
-    44 00000087 730C                        jnc .10E                    ; if (CF == BIOS(0x13, 0x02)) {
-    45                                                                  ;
-    46                                      .10T:                       ;   puts(.e0);
-    47 00000089 68[A500]E82B0083C4-         cdecl puts, .e0             ;   reboot();
-    47 00000091 02                 
-    48 00000092 E84400                      call reboot                 ; }
-    49                                  
-    50                                      .10E:
-    51                                  
-    52                                      ;; 次のステージへ移行
-    53 00000095 E96801                      jmp stage_2                 ; ブート処理の第2ステージ
-    54                                  
-    55                                      ;; データ
-    56 00000098 426F6F74696E672E2E-         .s0 db "Booting...", 0x0A, 0x0D, 0
-    56 000000A1 2E0A0D00           
-    57 000000A5 4572726F723A736563-         .e0 db "Error:sector read", 0
-    57 000000AE 746F72207265616400 
-    58                                  
-    59 000000B7 00                          ALIGN 2, db 0
-    60                                  BOOT:                           ; ブートドライブに関する情報
-    61 000000B8 0000                        .DRIVE: dw 0                ; ドライブ番号
-    62                                  
-    63                                  
-    64                                  ;;;
-    65                                  ;;; モジュール
-    66                                  ;;;
-    67                                      %include "../modules/real/puts.s"
+    34                                      ;; 残りのセクタをすべて読み込む
+    35 00000075 BB0F00                      mov bx, BOOT_SECT - 1           ; BX = 残りのぶーとセクタ数
+    36 00000078 B9007E                      mov cx, BOOT_LOAD + SECT_SIZE   ; CX = 次のロードアドレス
+    37                                  
+    38 0000007B 515368[B800]E89B00-         cdecl read_chs, BOOT, bx, cx    ; AX = read_chs(.chs, bx, cx);
+    38 00000083 83C406             
+    39                                  
+    40 00000086 39D8                        cmp ax, bx                      ; if (AX !=  残りのセクタ数)
+    41                                                                      ; {
+    42                                      .10Q:                           ;
+    43 00000088 740C                        jz .10E                         ;
+    44                                                                      ;
+    45                                      .10T:                           ;
+    46 0000008A 68[A600]E8300083C4-         cdecl puts, .e0                 ;     puts(.e0);
+    46 00000092 02                 
+    47 00000093 E84900                      call reboot                     ;     reboot();
+    48                                                                      ;
+    49                                      .10E:                           ; }
+    50                                  
+    51                                      ;; 次のステージへ移行
+    52 00000096 E96701                      jmp stage_2                 ; ブート処理の第2ステージ
+    53                                  
+    54                                      ;; データ
+    55 00000099 426F6F74696E672E2E-         .s0 db "Booting...", 0x0A, 0x0D, 0
+    55 000000A2 2E0A0D00           
+    56 000000A6 4572726F723A736563-         .e0 db "Error:sector read", 0
+    56 000000AF 746F72207265616400 
+    57                                  
+    58                                      ALIGN 2, db 0
+    59                                  BOOT:                           ; ブートドライブに関する情報
+    60                                      istruc drive
+    61 000000B8 0000                            at drive.no, dw 0
+    62 000000BA 0000                            at drive.cyln, dw 0
+    63 000000BC 0000                            at drive.head, dw 0
+    64 000000BE 0200                            at drive.sect, dw 2
+    65                                      iend
+    66                                  
+    67                                  
+    68                                  ;;;
+    69                                  ;;; モジュール
+    70                                  ;;;
+    71                                      %include "../modules/real/puts.s"
      1                              <1> ;;; 文字列の表示
      2                              <1> ;;; @fn puts(str);
      3                              <1> ;;; @param str the address of string
@@ -88,92 +106,169 @@
      5                              <1> 
      6                              <1> puts:
      7                              <1>     ;; スタックフレームの構築
-     8 000000BA 55                  <1>     push bp
-     9 000000BB 89E5                <1>     mov bp, sp
+     8 000000C0 55                  <1>     push bp
+     9 000000C1 89E5                <1>     mov bp, sp
     10                              <1>     ;; レジスタの保存
-    11 000000BD 50                  <1>     push ax
-    12 000000BE 53                  <1>     push bx
-    13 000000BF 56                  <1>     push si
+    11 000000C3 50                  <1>     push ax
+    12 000000C4 53                  <1>     push bx
+    13 000000C5 56                  <1>     push si
     14                              <1> 
-    15 000000C0 8B7604              <1>     mov si, [bp + 4]            ; SI = the address of string
+    15 000000C6 8B7604              <1>     mov si, [bp + 4]            ; SI = the address of string
     16                              <1> 
     17                              <1>     ;; 関数本体
-    18 000000C3 B40E                <1>     mov ah, 0x0E
-    19 000000C5 BB0000              <1>     mov bx, 0x0000
+    18 000000C9 B40E                <1>     mov ah, 0x0E
+    19 000000CB BB0000              <1>     mov bx, 0x0000
     20                              <1> 
-    21 000000C8 FC                  <1>     cld                         ; DF = 0;
+    21 000000CE FC                  <1>     cld                         ; DF = 0;
     22                              <1>                                 ; do {
     23                              <1>     .10L:                       ;    AL = *SI++;
-    24 000000C9 AC                  <1>     lodsb                       ;    if (0 == AL) break;
+    24 000000CF AC                  <1>     lodsb                       ;    if (0 == AL) break;
     25                              <1>                                 ;    Int10(0x0E, AL);
-    26 000000CA 3C00                <1>     cmp al, 0                   ; } while(1);
-    27 000000CC 7404                <1>     je .10E
+    26 000000D0 3C00                <1>     cmp al, 0                   ; } while(1);
+    27 000000D2 7404                <1>     je .10E
     28                              <1> 
-    29 000000CE CD10                <1>     int 0x10
-    30 000000D0 EBF7                <1>     jmp .10L
+    29 000000D4 CD10                <1>     int 0x10
+    30 000000D6 EBF7                <1>     jmp .10L
     31                              <1> 
     32                              <1>     .10E:
     33                              <1>     ;; レジスタの復帰
-    34 000000D2 5E                  <1>     pop si
-    35 000000D3 5B                  <1>     pop bx
-    36 000000D4 58                  <1>     pop ax
+    34 000000D8 5E                  <1>     pop si
+    35 000000D9 5B                  <1>     pop bx
+    36 000000DA 58                  <1>     pop ax
     37                              <1>     ;; スタックフレームの破棄
-    38 000000D5 89EC                <1>     mov sp, bp
-    39 000000D7 5D                  <1>     pop bp
+    38 000000DB 89EC                <1>     mov sp, bp
+    39 000000DD 5D                  <1>     pop bp
     40                              <1> 
-    41 000000D8 C3                  <1>     ret
-    68                                      %include "../modules/real/reboot.s"
+    41 000000DE C3                  <1>     ret
+    72                                      %include "../modules/real/reboot.s"
      1                              <1> ;;; メッセージを表示して再起動を行う
      2                              <1> ;;; void reboot(void);
      3                              <1> ;;;
      4                              <1> reboot:
      5                              <1>     ;; メッセージを表示
-     6 000000D9 68[F500]E8DBFF83C4- <1>     cdecl puts, .s0
-     6 000000E1 02                  <1>
+     6 000000DF 68[FB00]E8DBFF83C4- <1>     cdecl puts, .s0
+     6 000000E7 02                  <1>
      7                              <1> 
      8                              <1>     ;; キー入力待ち
      9                              <1>     .10L:
-    10 000000E2 B410                <1>     mov ah, 0x10
-    11 000000E4 CD16                <1>     int 0x16
+    10 000000E8 B410                <1>     mov ah, 0x10
+    11 000000EA CD16                <1>     int 0x16
     12                              <1> 
-    13 000000E6 3C20                <1>     cmp al, ' '
-    14 000000E8 75F8                <1>     jne .10L
+    13 000000EC 3C20                <1>     cmp al, ' '
+    14 000000EE 75F8                <1>     jne .10L
     15                              <1> 
     16                              <1>     ;; 改行を出力
-    17 000000EA 68[1301]E8CAFF83C4- <1>     cdecl puts, .s1
-    17 000000F2 02                  <1>
+    17 000000F0 68[1901]E8CAFF83C4- <1>     cdecl puts, .s1
+    17 000000F8 02                  <1>
     18                              <1> 
     19                              <1>     ;; 再起動
-    20 000000F3 CD19                <1>     int 0x19                    ; BIOS(0x19) reboot();
+    20 000000F9 CD19                <1>     int 0x19                    ; BIOS(0x19) reboot();
     21                              <1> 
     22                              <1>     ;; 文字列データ
-    23 000000F5 0A0D50757368205350- <1>     .s0 db 0x0A, 0x0D, "Push SPACE key to reboot...", 0
-    23 000000FE 414345206B65792074- <1>
-    23 00000107 6F207265626F6F742E- <1>
-    23 00000110 2E2E00              <1>
-    24 00000113 0A0D0A0D00          <1>     .s1 db 0x0A, 0x0D, 0x0A, 0x0D, 0
-    69                                  ;;;
-    70                                  ;;; ブートフラグ(先頭 512 バイトの終了)
-    71                                  ;;;
-    72 00000118 00<rept>                    times 510 - ($ - $$) db 0x00
-    73 000001FE 55AA                        db 0x55, 0xAA
-    74                                  
-    75                                  ;;;
-    76                                  ;;; ブート処理の第2ステージ
-    77                                  ;;;
-    78                                  stage_2:
-    79                                      ;; 文字列を表示
-    80 00000200 68[0B02]E8B4FE83C4-         cdecl puts, .s0             ; puts(.s0);
-    80 00000208 02                 
-    81                                  
-    82                                      ;; 処理の終了
-    83 00000209 EBFE                        jmp $                       ; while (1);
-    84                                  
-    85                                      ;; データ
-    86 0000020B 326E64207374616765-         .s0 db "2nd stage...", 0x0A, 0x0D, 0
-    86 00000214 2E2E2E0A0D00       
-    87                                  
-    88                                  ;;;
-    89                                  ;;; パディング(このファイルは 8K byte とする)
-    90                                  ;;;
-    91 0000021A 00<rept>                    times (2014 * 8) - ($ - $$) db 0 ; 8K byte
+    23 000000FB 0A0D50757368205350- <1>     .s0 db 0x0A, 0x0D, "Push SPACE key to reboot...", 0
+    23 00000104 414345206B65792074- <1>
+    23 0000010D 6F207265626F6F742E- <1>
+    23 00000116 2E2E00              <1>
+    24 00000119 0A0D0A0D00          <1>     .s1 db 0x0A, 0x0D, 0x0A, 0x0D, 0
+    73                                      %include "../modules/real/read_chs.s"
+     1                              <1> ;;; セクタ読み出し関数
+     2                              <1> ;;; @fn read_chs(drive, sect, dst);
+     3                              <1> ;;; @param drive the address of drive struct
+     4                              <1> ;;; @param sect the number of read sectors
+     5                              <1> ;;; @param dst the address of destination
+     6                              <1> ;;; @return the number of sectors that read
+     7                              <1> 
+     8                              <1> read_chs:
+     9                              <1>     ;; スタックフレームの構築
+    10 0000011E 55                  <1>     push bp                     ;    + 8| dst
+    11 0000011F 89E5                <1>     mov bp, sp                  ;    + 6| num sectors
+    12 00000121 6A03                <1>     push 3                      ;    + 4| param buff
+    13 00000123 6A00                <1>     push 0                      ; ------+------------
+    14                              <1>                                 ;    + 2| IP
+    15                              <1>                                 ; BP + 0| BP
+    16                              <1>                                 ;-------+-------------
+    17                              <1>                                 ;    - 2| retry = 3;
+    18                              <1>                                 ;    - 4| sect = 0;
+    19                              <1> 
+    20                              <1>     ;; レジスタの保存
+    21 00000125 53                  <1>     push bx
+    22 00000126 51                  <1>     push cx
+    23 00000127 52                  <1>     push dx
+    24 00000128 06                  <1>     push es
+    25 00000129 56                  <1>     push si
+    26                              <1> 
+    27                              <1>     ;; 処理の開始
+    28 0000012A 8B7604              <1>     mov si, [bp + 4]            ; SI = SRC buff
+    29                              <1> 
+    30                              <1>     ;; CX レジスタの設定
+    31 0000012D 8A6C02              <1>     mov ch, [si + drive.cyln + 0] ; CH = clynder number
+    32 00000130 8A4C03              <1>     mov cl, [si + drive.cyln + 1] ; CL = clynder number
+    33 00000133 C0E106              <1>     shl cl, 6                     ; CL <<= 6
+    34 00000136 0A4C06              <1>     or cl, [si + drive.sect]      ; CL |= sector number
+    35                              <1> 
+    36                              <1>     ;; セクタ読み込み
+    37 00000139 8A7404              <1>     mov dh, [si + drive.head]   ; DH = head number
+    38 0000013C 8A14                <1>     mov dl, [si + 0]            ; DL = drive number
+    39 0000013E B80000              <1>     mov ax, 0x0000              ; AX = 0x0000
+    40 00000141 8EC0                <1>     mov es, ax                  ; ES = segment
+    41 00000143 8B5E08              <1>     mov bx, [bp + 8]            ; BX = dst
+    42                              <1> 
+    43                              <1>     .10L:
+    44 00000146 B402                <1>     mov ah, 0x02
+    45 00000148 8A4606              <1>     mov al, [bp + 6]
+    46                              <1> 
+    47 0000014B CD13                <1>     int 0x13
+    48 0000014D 7304                <1>     jnc .11E
+    49                              <1> 
+    50 0000014F B000                <1>     mov al, 0
+    51 00000151 EB0C                <1>     jmp .10E
+    52                              <1> 
+    53                              <1>     .11E:
+    54 00000153 3C00                <1>     cmp al, 0
+    55 00000155 7508                <1>     jne .10E
+    56                              <1> 
+    57 00000157 B80000              <1>     mov ax, 0
+    58 0000015A FF4EFE              <1>     dec word [bp - 2]
+    59 0000015D 75E7                <1>     jnz .10L
+    60                              <1> 
+    61                              <1>     .10E:
+    62 0000015F B400                <1>     mov ah, 0
+    63                              <1> 
+    64                              <1>     ;; レジスタの復帰
+    65 00000161 5E                  <1>     pop si
+    66 00000162 07                  <1>     pop es
+    67 00000163 5A                  <1>     pop dx
+    68 00000164 59                  <1>     pop cx
+    69 00000165 5B                  <1>     pop bx
+    70                              <1> 
+    71                              <1> 
+    72                              <1>     ;; スタックフレームの破棄
+    73 00000166 89EC                <1>     mov sp, bp
+    74 00000168 5D                  <1>     pop bp
+    75                              <1> 
+    76 00000169 C3                  <1>     ret
+    74                                  ;;;
+    75                                  ;;; ブートフラグ(先頭 512 バイトの終了)
+    76                                  ;;;
+    77 0000016A 00<rept>                    times 510 - ($ - $$) db 0x00
+    78 000001FE 55AA                        db 0x55, 0xAA
+    79                                  
+    80                                  ;;;
+    81                                  ;;; ブート処理の第2ステージ
+    82                                  ;;;
+    83                                  stage_2:
+    84                                      ;; 文字列を表示
+    85 00000200 68[0B02]E8BAFE83C4-         cdecl puts, .s0             ; puts(.s0);
+    85 00000208 02                 
+    86                                  
+    87                                      ;; 処理の終了
+    88 00000209 EBFE                        jmp $                       ; while (1);
+    89                                  
+    90                                      ;; データ
+    91 0000020B 326E64207374616765-         .s0 db "2nd stage...", 0x0A, 0x0D, 0
+    91 00000214 2E2E2E0A0D00       
+    92                                  
+    93                                  ;;;
+    94                                  ;;; パディング(このファイルは 8K byte とする)
+    95                                  ;;;
+    96 0000021A 00<rept>                    times BOOT_SIZE - ($ - $$) db 0 ; padding

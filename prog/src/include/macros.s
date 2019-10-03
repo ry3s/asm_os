@@ -11,9 +11,10 @@
     %endif
 %endmacro
 
+;;; drive parameter
     struc drive
-    .no reww 1                  ; dirve number
-    .cyln reww 1                ; cylinder
-    .head reww 1                ; head
-    .sect reww 1                ; sector
+        .no resw 1                  ; dirve number
+        .cyln resw 1                ; cylinder
+        .head resw 1                ; head
+        .sect resw 1                ; sector
     endstruc
