@@ -82,6 +82,9 @@ BOOT:                           ; ブートドライブに関する情報
 FONT:
     .seg: dw 0
     .off: dw 0
+ACPI_DATA:                      ; acpi data
+    .adr dd 0                   ; acpi data address
+    .len dd 0                   ; acpi data length
 ;;;
 ;;; モジュール(先頭 512 byte 以降に配置)
 ;;;
@@ -89,6 +92,7 @@ FONT:
     %include "../modules/real/itoa.s"
     %include "../modules/real/get_drive_param.s"
     %include "../modules/real/get_font_adr.s"
+    %include "../modules/real/get_mem_info.s"
 ;;;
 ;;; ブート処理の第2ステージ
 ;;;
@@ -148,16 +152,34 @@ stage_3rd:
     cdecl itoa, word [FONT.seg], .p1, 4, 16, 0b0100
     cdecl itoa, word [FONT.off], .p2, 4, 16, 0b0100
     cdecl puts, .s1
+
+    ;; メモリ情報の取得と表示
+    cdecl get_mem_info          ; get_mem_inf();
+
+    mov eax, [ACPI_DATA.adr]    ; EAX = ACPI.adr;
+    cmp eax, 0                  ; if (EAX) {
+    je .10E
+
+    cdecl itoa, ax, .p4, 4, 16, 0b0100 ; itoa(AX); 下位アドレスを変換
+    shr eax, 16                        ; EAX >>= 16;
+    cdecl itoa, ax, .p3, 4, 16, 0b0100 ; itoa(AX); 上位アドレスを変換
+
+    cdecl puts, .s2
+    .10E:
     ;; 処理の終了
     jmp $                ; while (1)
 
     ;; data
-    .s0: db "3rd stage...,", 0x0A, 0x0D, 0
+    .s0: db "3rd stage...", 0x0A, 0x0D, 0
 
     .s1: db " Font Address="
     .p1: db "ZZZZ:"
     .p2: db "ZZZZ", 0x0A, 0x0D, 0
     db 0x0A, 0x0D, 0
+
+    .s2:	db	" ACPI data="
+    .p3:	db	"ZZZZ"
+    .p4:	db	"ZZZZ", 0x0A, 0x0D, 0
 ;;;
 ;;; パディング(このファイルは 8K byte とする)
 ;;;
