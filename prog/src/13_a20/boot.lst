@@ -1,0 +1,1022 @@
+     1                                  ;;;
+     2                                  ;;; マクロ
+     3                                  ;;;
+     4                                      %include "../include/define.s"
+     1                              <1>     BOOT_LOAD equ 0x7C00
+     2                              <1> 
+     3                              <1>     BOOT_SIZE equ (1024 * 8)
+     4                              <1>     SECT_SIZE equ (512)
+     5                              <1>     BOOT_SECT equ (BOOT_SIZE / SECT_SIZE)
+     6                              <1> 
+     7                              <1>     E820_RECORD_SIZE equ 20
+     5                                      %include "../include/macros.s"
+     1                              <1> %macro cdecl 1-*.nolist
+     2                              <1>     %rep %0 - 1
+     3                              <1>     push %{-1:-1}
+     4                              <1>     %rotate - 1
+     5                              <1>     %endrep
+     6                              <1>     %rotate -1
+     7                              <1>     call %1
+     8                              <1> 
+     9                              <1>     %if 1 < %0
+    10                              <1>     add sp, (__BITS__ >> 3) * (%0 - 1)
+    11                              <1>     %endif
+    12                              <1> %endmacro
+    13                              <1> 
+    14                              <1> ;;; drive parameter
+    15                              <1>     struc drive
+    16 00000000 <res 00000002>      <1>         .no resw 1                  ; dirve number
+    17 00000002 <res 00000002>      <1>         .cyln resw 1                ; cylinder
+    18 00000004 <res 00000002>      <1>         .head resw 1                ; head
+    19 00000006 <res 00000002>      <1>         .sect resw 1                ; sector
+    20                              <1>     endstruc
+     6                                  
+     7                                      ORG BOOT_LOAD               ; ロードアドレスをアセンブラに指示
+     8                                  ;;;
+     9                                  ;;; エントリポイント
+    10                                  ;;;
+    11                                  entry:
+    12 00000000 EB58                        jmp ipl                       ; IPLへジャンプ
+    13                                  
+    14                                      ;; BPB(BIOS Prameter Block)
+    15 00000002 90<rept>                    times 90 - ($ - $$) db 0x90
+    16                                  
+    17                                      ;; IPL (Initial Program Loader)
+    18                                  ipl:
+    19 0000005A FA                          cli                        ; 割り込み禁止
+    20                                  
+    21 0000005B B80000                      mov ax, 0x0000              ; AX = 0x0000;
+    22 0000005E 8ED8                        mov ds, ax                  ; DS = 0x0000;
+    23 00000060 8EC0                        mov es, ax                  ; ES = 0x0000;
+    24 00000062 8ED0                        mov ss, ax                  ; SS = 0x0000;
+    25 00000064 BC007C                      mov sp, BOOT_LOAD           ; SP = 0x7C00;
+    26                                  
+    27 00000067 FB                          sti                        ; 割り込み許可
+    28                                  
+    29 00000068 8816[B800]                  mov [BOOT + drive.no], dl       ; ブートドライブを保存
+    30                                  
+    31                                      ;; 文字を表示
+    32 0000006C 68[9900]E84E0083C4-         cdecl puts, .s0             ; puts(.s0);
+    32 00000074 02                 
+    33                                  
+    34                                      ;; 残りのセクタをすべて読み込む
+    35 00000075 BB0F00                      mov bx, BOOT_SECT - 1           ; BX = 残りのぶーとセクタ数
+    36 00000078 B9007E                      mov cx, BOOT_LOAD + SECT_SIZE   ; CX = 次のロードアドレス
+    37                                  
+    38 0000007B 515368[B800]E89B00-         cdecl read_chs, BOOT, bx, cx    ; AX = read_chs(.chs, bx, cx);
+    38 00000083 83C406             
+    39                                  
+    40 00000086 39D8                        cmp ax, bx                      ; if (AX !=  残りのセクタ数)
+    41                                                                      ; {
+    42                                      .10Q:                           ;
+    43 00000088 740C                        jz .10E                         ;
+    44                                                                      ;
+    45                                      .10T:                           ;
+    46 0000008A 68[A600]E8300083C4-         cdecl puts, .e0                 ;     puts(.e0);
+    46 00000092 02                 
+    47 00000093 E84900                      call reboot                     ;     reboot();
+    48                                                                      ;
+    49                                      .10E:                           ; }
+    50                                  
+    51                                      ;; 次のステージへ移行
+    52 00000096 E96305                      jmp stage_2                 ; ブート処理の第2ステージ
+    53                                  
+    54                                      ;; データ
+    55 00000099 426F6F74696E672E2E-         .s0 db "Booting...", 0x0A, 0x0D, 0
+    55 000000A2 2E0A0D00           
+    56 000000A6 4572726F723A736563-         .e0 db "Error:sector read", 0
+    56 000000AF 746F72207265616400 
+    57                                  
+    58                                      ALIGN 2, db 0
+    59                                  BOOT:                           ; ブートドライブに関する情報
+    60                                      istruc drive
+    61 000000B8 0000                            at drive.no, dw 0
+    62 000000BA 0000                            at drive.cyln, dw 0
+    63 000000BC 0000                            at drive.head, dw 0
+    64 000000BE 0200                            at drive.sect, dw 2
+    65                                      iend
+    66                                  
+    67                                  
+    68                                  ;;;
+    69                                  ;;; モジュール
+    70                                  ;;;
+    71                                      %include "../modules/real/puts.s"
+     1                              <1> ;;; 文字列の表示
+     2                              <1> ;;; @fn puts(str);
+     3                              <1> ;;; @param str the address of string
+     4                              <1> ;;; @return nothing
+     5                              <1> 
+     6                              <1> puts:
+     7                              <1>     ;; スタックフレームの構築
+     8 000000C0 55                  <1>     push bp
+     9 000000C1 89E5                <1>     mov bp, sp
+    10                              <1>     ;; レジスタの保存
+    11 000000C3 50                  <1>     push ax
+    12 000000C4 53                  <1>     push bx
+    13 000000C5 56                  <1>     push si
+    14                              <1> 
+    15 000000C6 8B7604              <1>     mov si, [bp + 4]            ; SI = the address of string
+    16                              <1> 
+    17                              <1>     ;; 関数本体
+    18 000000C9 B40E                <1>     mov ah, 0x0E
+    19 000000CB BB0000              <1>     mov bx, 0x0000
+    20                              <1> 
+    21 000000CE FC                  <1>     cld                         ; DF = 0;
+    22                              <1>                                 ; do {
+    23                              <1>     .10L:                       ;    AL = *SI++;
+    24 000000CF AC                  <1>     lodsb                       ;    if (0 == AL) break;
+    25                              <1>                                 ;    Int10(0x0E, AL);
+    26 000000D0 3C00                <1>     cmp al, 0                   ; } while(1);
+    27 000000D2 7404                <1>     je .10E
+    28                              <1> 
+    29 000000D4 CD10                <1>     int 0x10
+    30 000000D6 EBF7                <1>     jmp .10L
+    31                              <1> 
+    32                              <1>     .10E:
+    33                              <1>     ;; レジスタの復帰
+    34 000000D8 5E                  <1>     pop si
+    35 000000D9 5B                  <1>     pop bx
+    36 000000DA 58                  <1>     pop ax
+    37                              <1>     ;; スタックフレームの破棄
+    38 000000DB 89EC                <1>     mov sp, bp
+    39 000000DD 5D                  <1>     pop bp
+    40                              <1> 
+    41 000000DE C3                  <1>     ret
+    72                                      %include "../modules/real/reboot.s"
+     1                              <1> ;;; メッセージを表示して再起動を行う
+     2                              <1> ;;; void reboot(void);
+     3                              <1> ;;;
+     4                              <1> reboot:
+     5                              <1>     ;; メッセージを表示
+     6 000000DF 68[FB00]E8DBFF83C4- <1>     cdecl puts, .s0
+     6 000000E7 02                  <1>
+     7                              <1> 
+     8                              <1>     ;; キー入力待ち
+     9                              <1>     .10L:
+    10 000000E8 B410                <1>     mov ah, 0x10
+    11 000000EA CD16                <1>     int 0x16
+    12                              <1> 
+    13 000000EC 3C20                <1>     cmp al, ' '
+    14 000000EE 75F8                <1>     jne .10L
+    15                              <1> 
+    16                              <1>     ;; 改行を出力
+    17 000000F0 68[1901]E8CAFF83C4- <1>     cdecl puts, .s1
+    17 000000F8 02                  <1>
+    18                              <1> 
+    19                              <1>     ;; 再起動
+    20 000000F9 CD19                <1>     int 0x19                    ; BIOS(0x19) reboot();
+    21                              <1> 
+    22                              <1>     ;; 文字列データ
+    23 000000FB 0A0D50757368205350- <1>     .s0 db 0x0A, 0x0D, "Push SPACE key to reboot...", 0
+    23 00000104 414345206B65792074- <1>
+    23 0000010D 6F207265626F6F742E- <1>
+    23 00000116 2E2E00              <1>
+    24 00000119 0A0D0A0D00          <1>     .s1 db 0x0A, 0x0D, 0x0A, 0x0D, 0
+    73                                      %include "../modules/real/read_chs.s"
+     1                              <1> ;;; セクタ読み出し関数
+     2                              <1> ;;; @fn read_chs(drive, sect, dst);
+     3                              <1> ;;; @param drive the address of drive struct
+     4                              <1> ;;; @param sect the number of read sectors
+     5                              <1> ;;; @param dst the address of destination
+     6                              <1> ;;; @return the number of sectors that read
+     7                              <1> 
+     8                              <1> read_chs:
+     9                              <1>     ;; スタックフレームの構築
+    10 0000011E 55                  <1>     push bp                     ;    + 8| dst
+    11 0000011F 89E5                <1>     mov bp, sp                  ;    + 6| num sectors
+    12 00000121 6A03                <1>     push 3                      ;    + 4| param buff
+    13 00000123 6A00                <1>     push 0                      ; ------+------------
+    14                              <1>                                 ;    + 2| IP
+    15                              <1>                                 ; BP + 0| BP
+    16                              <1>                                 ;-------+-------------
+    17                              <1>                                 ;    - 2| retry = 3;
+    18                              <1>                                 ;    - 4| sect = 0;
+    19                              <1> 
+    20                              <1>     ;; レジスタの保存
+    21 00000125 53                  <1>     push bx
+    22 00000126 51                  <1>     push cx
+    23 00000127 52                  <1>     push dx
+    24 00000128 06                  <1>     push es
+    25 00000129 56                  <1>     push si
+    26                              <1> 
+    27                              <1>     ;; 処理の開始
+    28 0000012A 8B7604              <1>     mov si, [bp + 4]            ; SI = SRC buff
+    29                              <1> 
+    30                              <1>     ;; CX レジスタの設定
+    31 0000012D 8A6C02              <1>     mov ch, [si + drive.cyln + 0] ; CH = clynder number
+    32 00000130 8A4C03              <1>     mov cl, [si + drive.cyln + 1] ; CL = clynder number
+    33 00000133 C0E106              <1>     shl cl, 6                     ; CL <<= 6
+    34 00000136 0A4C06              <1>     or cl, [si + drive.sect]      ; CL |= sector number
+    35                              <1> 
+    36                              <1>     ;; セクタ読み込み
+    37 00000139 8A7404              <1>     mov dh, [si + drive.head]   ; DH = head number
+    38 0000013C 8A14                <1>     mov dl, [si + 0]            ; DL = drive number
+    39 0000013E B80000              <1>     mov ax, 0x0000              ; AX = 0x0000
+    40 00000141 8EC0                <1>     mov es, ax                  ; ES = segment
+    41 00000143 8B5E08              <1>     mov bx, [bp + 8]            ; BX = dst
+    42                              <1> 
+    43                              <1>     .10L:
+    44 00000146 B402                <1>     mov ah, 0x02
+    45 00000148 8A4606              <1>     mov al, [bp + 6]
+    46                              <1> 
+    47 0000014B CD13                <1>     int 0x13
+    48 0000014D 7304                <1>     jnc .11E
+    49                              <1> 
+    50 0000014F B000                <1>     mov al, 0
+    51 00000151 EB0C                <1>     jmp .10E
+    52                              <1> 
+    53                              <1>     .11E:
+    54 00000153 3C00                <1>     cmp al, 0
+    55 00000155 7508                <1>     jne .10E
+    56                              <1> 
+    57 00000157 B80000              <1>     mov ax, 0
+    58 0000015A FF4EFE              <1>     dec word [bp - 2]
+    59 0000015D 75E7                <1>     jnz .10L
+    60                              <1> 
+    61                              <1>     .10E:
+    62 0000015F B400                <1>     mov ah, 0
+    63                              <1> 
+    64                              <1>     ;; レジスタの復帰
+    65 00000161 5E                  <1>     pop si
+    66 00000162 07                  <1>     pop es
+    67 00000163 5A                  <1>     pop dx
+    68 00000164 59                  <1>     pop cx
+    69 00000165 5B                  <1>     pop bx
+    70                              <1> 
+    71                              <1> 
+    72                              <1>     ;; スタックフレームの破棄
+    73 00000166 89EC                <1>     mov sp, bp
+    74 00000168 5D                  <1>     pop bp
+    75                              <1> 
+    76 00000169 C3                  <1>     ret
+    74                                  ;;;
+    75                                  ;;; ブートフラグ(先頭 512 バイトの終了)
+    76                                  ;;;
+    77 0000016A 00<rept>                    times 510 - ($ - $$) db 0x00
+    78 000001FE 55AA                        db 0x55, 0xAA
+    79                                  ;;;
+    80                                  ;;; リアルモード時に取得した情報
+    81                                  ;;;
+    82                                  FONT:
+    83 00000200 0000                        .seg: dw 0
+    84 00000202 0000                        .off: dw 0
+    85                                  ACPI_DATA:                      ; acpi data
+    86 00000204 00000000                    .adr dd 0                   ; acpi data address
+    87 00000208 00000000                    .len dd 0                   ; acpi data length
+    88                                  ;;;
+    89                                  ;;; モジュール(先頭 512 byte 以降に配置)
+    90                                  ;;;
+    91                                  ;;;
+    92                                      %include "../modules/real/itoa.s"
+     1                              <1> ;;; 数値を文字列に変換する
+     2                              <1> ;;; @fn  void itoa(num,  buff, size, radix, flag)
+     3                              <1> ;;; @param num 変換する値
+     4                              <1> ;;; @param buff 保存先バッファアドレス
+     5                              <1> ;;; @param size 保存先バッファサイズ
+     6                              <1> ;;; @param radix 2, 8, 10 or 16
+     7                              <1> ;;; @param flag
+     8                              <1> ;;;        B2: 空白をゼロで埋める
+     9                              <1> ;;;        B1: '+/-' 記号を付加する
+    10                              <1> ;;;        B0: 値を符号付き変数として扱う
+    11                              <1> 
+    12                              <1> itoa:
+    13                              <1>     ;; スタックフレームの構築
+    14 0000020C 55                  <1>     push bp                     ;   +12| flag
+    15 0000020D 89E5                <1>     mov bp, sp                  ;   +10| radix
+    16                              <1>                                 ;   + 8| buff size
+    17                              <1>                                 ;   + 6| buff address
+    18                              <1>                                 ;   + 4| num
+    19                              <1>                                 ;   + 2| IP
+    20                              <1>                                 ; BP+ 0| BP
+    21                              <1>                                 ; -----+-------------
+    22                              <1> 
+    23                              <1>     ;; レジスタの保存
+    24 0000020F 50                  <1>     push	ax
+    25 00000210 53                  <1> 	push	bx
+    26 00000211 51                  <1> 	push	cx
+    27 00000212 52                  <1> 	push	dx
+    28 00000213 56                  <1> 	push	si
+    29 00000214 57                  <1> 	push	di
+    30                              <1> 
+    31                              <1>     ;; 引数の取得
+    32 00000215 8B4604              <1>     mov		ax, [bp + 4]					; val  = 数値;
+    33 00000218 8B7606              <1> 	mov		si, [bp + 6]					; dst  = バッファアドレス;
+    34 0000021B 8B4E08              <1> 	mov		cx, [bp + 8]					; size = 残りバッファサイズ;
+    35                              <1> 
+    36 0000021E 89F7                <1> 	mov		di, si							; // バッファの最後尾
+    37 00000220 01CF                <1> 	add		di, cx							; dst  = &dst[size - 1];
+    38 00000222 4F                  <1> 	dec		di								;
+    39                              <1> 
+    40 00000223 8B5E0C              <1> 	mov		bx, [bp +12]					; flags = オプション;
+    41                              <1> 
+    42                              <1>     ;; 符号付き判定
+    43 00000226 F7C30100            <1>     test bx, 0b0001             ; if (flags & 0b01) {
+    44                              <1>                                 ;   if (val > 0) {
+    45                              <1>     .10Q:                       ;     flag |= 2;
+    46 0000022A 7408                <1>     je .10E                     ;   }
+    47 0000022C 83F800              <1>     cmp ax, 0                   ; }
+    48                              <1> 
+    49                              <1>     .12Q:
+    50 0000022F 7D03                <1>     jge .12E
+    51 00000231 83CB02              <1>     or bx, 0b0010
+    52                              <1> 
+    53                              <1>     .12E:
+    54                              <1>     .10E:
+    55                              <1> 
+    56                              <1>     ;; 符号出力判定
+    57 00000234 F7C30200            <1>     test bx, 0b0010             ; if (flag & 0x02) {
+    58                              <1>                                 ;   if (val > 0) {
+    59                              <1>     .20Q:                       ;      val *= -1;
+    60 00000238 7410                <1>     je .20E                     ;      *dst = '-';
+    61 0000023A 83F800              <1>     cmp ax, 0                   ;   } else {
+    62                              <1>                                 ;      *dst = '+';
+    63                              <1>     .22Q:                       ;   }
+    64 0000023D 7D07                <1>     jge .22F                    ;
+    65 0000023F F7D8                <1>     neg ax                      ;   size--;
+    66 00000241 C6042D              <1>     mov [si], byte '-'          ; }
+    67 00000244 EB03                <1>     jmp .22E
+    68                              <1> 
+    69                              <1>     .22F:
+    70 00000246 C6042B              <1>     mov [si], byte '+'
+    71                              <1> 
+    72                              <1>     .22E:
+    73 00000249 49                  <1>     dec cx
+    74                              <1> 
+    75                              <1>     .20E:
+    76                              <1> 
+    77                              <1>     ;; ASCII 変換
+    78 0000024A 8B5E0A              <1>     mov bx, [bp + 10]           ; BX = radix
+    79                              <1>                                 ;
+    80                              <1>     .30L:                       ; do {
+    81 0000024D BA0000              <1>     mov dx, 0                   ;  DX = DX:AX % radix;
+    82 00000250 F7F3                <1>     div bx                      ;  AX = DX:AX / radix;
+    83                              <1>                                 ;
+    84 00000252 89D6                <1>     mov si, dx                  ;
+    85 00000254 8A94[7C02]          <1>     mov dl, byte [.ascii + si]  ;  DL = ASCII[DX];
+    86 00000258 8815                <1>     mov [di], dl                ;  *dst = DL;
+    87 0000025A 4F                  <1>     dec di                      ;   dst--;
+    88                              <1>                                 ;
+    89 0000025B 83F800              <1>     cmp ax, 0                   ;
+    90 0000025E E0ED                <1>     loopnz .30L                 ; } while (AX);
+    91                              <1> 
+    92                              <1>     .30E:
+    93                              <1> 
+    94                              <1>     ;; 空白を埋める
+    95 00000260 83F900              <1>     cmp cx, 0                   ; if (size) {
+    96                              <1>                                 ;
+    97                              <1>     .40Q:                       ;
+    98 00000263 740D                <1>     je .40E                     ;
+    99 00000265 B020                <1>     mov al, ' '                 ;    AL = ' '
+   100 00000267 837E0C04            <1>     cmp [bp + 12], word 0b0100  ;    if (flag & 0x04) {
+   101                              <1>                                 ;
+   102                              <1>     .42Q:                       ;
+   103 0000026B 7502                <1>     jne .42E                    ;
+   104 0000026D B030                <1>     mov al, '0'                 ;       AL = '0';
+   105                              <1>                                 ;    }
+   106                              <1>     .42E:                       ;
+   107 0000026F FD                  <1>     std                         ;    DF = 1
+   108 00000270 F3AA                <1>     rep stosb                   ;    while (--cx) *DI-- = ' ';
+   109                              <1>                                 ;
+   110                              <1>     .40E:                       ; }
+   111                              <1> 
+   112                              <1>     ;; レジスタの復帰
+   113 00000272 5F                  <1> 	pop		di
+   114 00000273 5E                  <1> 	pop		si
+   115 00000274 5A                  <1> 	pop		dx
+   116 00000275 59                  <1> 	pop		cx
+   117 00000276 5B                  <1> 	pop		bx
+   118 00000277 58                  <1> 	pop		ax
+   119                              <1> 
+   120                              <1>     ;; スタックフレームの破棄
+   121 00000278 89EC                <1> 	mov		sp, bp
+   122 0000027A 5D                  <1> 	pop		bp
+   123                              <1> 
+   124 0000027B C3                  <1> 	ret
+   125                              <1> 
+   126                              <1> 
+   127 0000027C 303132333435363738- <1>     .ascii db "0123456789ABCDEF" ; 変換テーブル
+   127 00000285 39414243444546      <1>
+    93                                      %include "../modules/real/get_drive_param.s"
+     1                              <1> ;;; ドライブパラメータを取得する
+     2                              <1> ;;; @fn get_drive_param(drive);
+     3                              <1> ;;; @param (drive) pointer: drive struct
+     4                              <1> ;;; @return 0: fail
+     5                              <1> 
+     6                              <1> get_drive_param:
+     7                              <1>     ;; スタックフレームの構築
+     8 0000028C 55                  <1>     push bp                     ;   + 4| param buff
+     9 0000028D 89E5                <1>     mov bp, sp                 ;   + 2| IP
+    10                              <1>                                 ; BP+ 0| BP
+    11                              <1> 
+    12                              <1>     ;; レジスタの保存
+    13 0000028F 53                  <1>     push bx
+    14 00000290 51                  <1>     push cx
+    15 00000291 06                  <1>     push es
+    16 00000292 56                  <1>     push si
+    17 00000293 57                  <1>     push di
+    18                              <1> 
+    19                              <1>     ;; 処理の開始
+    20 00000294 8B7604              <1>     mov si, [bp + 4]            ; SI = buff;
+    21                              <1> 
+    22 00000297 B80000              <1>     mov ax, 0                   ; init Disk Base Table Pointer
+    23 0000029A 8EC0                <1>     mov es, ax                  ; ES = 0;
+    24 0000029C 89C7                <1>     mov di, ax                  ; DI = 0;
+    25                              <1> 
+    26 0000029E B408                <1>     mov ah, 8                   ;
+    27 000002A0 8A14                <1>     mov dl, [si + drive.no]     ; DL = drive number;
+    28 000002A2 CD13                <1>     int 0x13                    ; CF = BIOS(0x13, 8);
+    29                              <1>                                 ;
+    30                              <1>     .10Q:                       ;
+    31 000002A4 721B                <1>     jc .10F                     ; if (0 == CF)
+    32                              <1>                                 ; {
+    33                              <1>     .10T:                       ;
+    34 000002A6 88C8                <1>     mov al, cl                  ;
+    35 000002A8 83E03F              <1>     and ax, 0x3F                ;   AX = num_sector
+    36                              <1>                                 ;
+    37 000002AB C0E906              <1>     shr cl, 6                   ;
+    38 000002AE C1C908              <1>     ror cx, 8                   ;
+    39 000002B1 41                  <1>     inc cx                      ;   CX = num_clyn
+    40                              <1>                                 ;
+    41 000002B2 0FB6DE              <1>     movzx bx, dh                ;
+    42 000002B5 43                  <1>     inc bx                      ;   BX = num_head(1-based)
+    43                              <1>                                 ;
+    44 000002B6 894C02              <1>     mov [si + drive.cyln], cx   ;   drive.clyn = CX;
+    45 000002B9 895C04              <1>     mov [si + drive.head], bx   ;   drive.head = BX;
+    46 000002BC 894406              <1>     mov [si + drive.sect], ax   ;   drive.sect = AX;
+    47                              <1>                                 ;
+    48 000002BF EB03                <1>     jmp .10E                    ; }
+    49                              <1>                                 ; else
+    50                              <1>     .10F:                       ; {
+    51 000002C1 B80000              <1>     mov ax, 0                   ;   AX = 0; failure
+    52                              <1>                                 ;
+    53                              <1>     .10E:                       ; }
+    54                              <1> 
+    55                              <1>     ;; レジスタの復帰
+    56 000002C4 5F                  <1>     pop di
+    57 000002C5 5E                  <1>     pop si
+    58 000002C6 07                  <1>     pop es
+    59 000002C7 59                  <1>     pop cx
+    60 000002C8 5B                  <1>     pop bx
+    61                              <1> 
+    62                              <1>     ;; スタックフレームの破棄
+    63 000002C9 89EC                <1>     mov sp, bp
+    64 000002CB 5D                  <1>     pop bp
+    65                              <1> 
+    66 000002CC C3                  <1>     ret
+    94                                      %include "../modules/real/get_font_adr.s"
+     1                              <1> ;;; BIOS のフォントデータを取得する
+     2                              <1> ;;; @fn get_font_adr(adr);
+     3                              <1> ;;; @param (adr) フォントアドレス格納位置
+     4                              <1> ;;; @return void
+     5                              <1> 
+     6                              <1> 
+     7                              <1> get_font_adr:
+     8                              <1>     ;; スタックフレームの構築
+     9 000002CD 55                  <1>     push bp
+    10 000002CE 89E5                <1>     mov bp, sp
+    11                              <1> 
+    12                              <1>     ;; レジスタの保存
+    13 000002D0 50                  <1>     push ax
+    14 000002D1 53                  <1>     push bx
+    15 000002D2 56                  <1>     push si
+    16 000002D3 06                  <1>     push es
+    17 000002D4 55                  <1>     push bp
+    18                              <1> 
+    19                              <1>     ;; 引数を取得
+    20 000002D5 8B7604              <1>     mov si, [bp + 4]
+    21                              <1> 
+    22                              <1>     ;; フォントアドレスの取得
+    23 000002D8 B83011              <1>     mov ax, 0x1130
+    24 000002DB B706                <1>     mov bh, 0x06                ; 8x16 font (vga/mcga)
+    25 000002DD CD10                <1>     int 10h                     ; ES:BP = font address
+    26                              <1> 
+    27                              <1>     ;; フォントアドレスを保存
+    28 000002DF 8C04                <1>     mov [si + 0], es            ; dst[0] = segment;
+    29 000002E1 896C02              <1>     mov [si + 2], bp            ; dst[1] = offset;
+    30                              <1> 
+    31                              <1>     ;; レジスタの復帰
+    32 000002E4 5D                  <1>     pop bp
+    33 000002E5 07                  <1>     pop es
+    34 000002E6 5E                  <1>     pop si
+    35 000002E7 5B                  <1>     pop bx
+    36 000002E8 58                  <1>     pop ax
+    37                              <1> 
+    38                              <1>     ;; スタックフレームの破棄
+    39 000002E9 89EC                <1>     mov sp, bp
+    40 000002EB 5D                  <1>     pop bp
+    41                              <1> 
+    42 000002EC C3                  <1>     ret
+    95                                      %include "../modules/real/get_mem_info.s"
+     1                              <1> ;;; メモリの実装状況を確認する
+     2                              <1> ;;; @fn void get_mem_info(void)
+     3                              <1> ;;;
+     4                              <1> get_mem_info:
+     5                              <1>     ;; レジスタの保存
+     6 000002ED 6650                <1>     push eax
+     7 000002EF 6653                <1>     push ebx
+     8 000002F1 6651                <1>     push ecx
+     9 000002F3 6652                <1>     push edx
+    10 000002F5 56                  <1>     push si
+    11 000002F6 57                  <1>     push di
+    12 000002F7 55                  <1>     push bp
+    13                              <1> 
+    14                              <1> 
+    15 000002F8 68[8C03]E8C2FD83C4- <1>     cdecl puts, .s0
+    15 00000300 02                  <1>
+    16 00000301 BD0000              <1>     mov bp, 0                   ; lines = 0;
+    17 00000304 66BB00000000        <1>     mov ebx, 0                  ; index = 0;
+    18                              <1> 
+    19                              <1>     .10L:                       ; do {
+    20 0000030A 66B820E80000        <1>     mov eax, 0x0000E820         ;   EAX = 0x0000E820;
+    21 00000310 66B914000000        <1>     mov ecx, E820_RECORD_SIZE   ;   ECX = index;
+    22 00000316 66BA50414D53        <1>     mov edx, 'PAMS'             ;   EDX = 'SMAP';
+    23 0000031C BF[1804]            <1>     mov di, .b0                  ;   ES:DI = buff;
+    24 0000031F CD15                <1>     int 0x15                    ;   BIOS(0x15, 0xE820);
+    25                              <1> 
+    26 00000321 663D50414D53        <1>     cmp eax, 'PAMS'             ;   if ('SMAP' != EAX) {//コマンドに対応しているか？
+    27 00000327 7402                <1>     je .12E                     ;       break;
+    28 00000329 EB4C                <1>     jmp .10E                    ;	}
+    29                              <1>     .12E:                       ;   if (CF) {//エラーなし？
+    30 0000032B 7302                <1>     jnc .14E                    ;       break;
+    31 0000032D EB48                <1>     jmp .10E                    ;   }
+    32                              <1>     .14E:                       ;
+    33                              <1> 
+    34                              <1>     ;; 1レコード分のメモリ情報を表示
+    35 0000032F 57E8F90083C402      <1>     cdecl put_mem_info, di
+    36                              <1>     ;; ACPI data のアドレスを取得
+    37 00000336 668B4510            <1>     mov eax, [di + 16]          ;   EAX = record type;
+    38 0000033A 6683F803            <1>     cmp eax, 3                  ;   if (3 == EAX) {// ACPI data
+    39 0000033E 750F                <1>     jne .15E
+    40                              <1> 
+    41 00000340 668B05              <1>     mov eax, [di + 0]           ;   EAX = BASE address;
+    42 00000343 66A3[0402]          <1>     mov [ACPI_DATA.adr], eax    ;
+    43                              <1> 
+    44 00000347 668B4508            <1>     mov eax, [di + 8]           ;   EAX = Length;
+    45 0000034B 66A3[0802]          <1>     mov [ACPI_DATA.len], eax    ;
+    46                              <1>     .15E:                       ;   }
+    47                              <1> 
+    48 0000034F 6683FB00            <1>     cmp ebx, 0                  ;   if (0 != EBX) {
+    49 00000353 741C                <1>     jz .16E                      ;
+    50                              <1> 
+    51 00000355 45                  <1>     inc bp                      ;       lines++;
+    52 00000356 83E507              <1>     and bp, 0x07                ;       lines &= 0x07;
+    53 00000359 7516                <1>     jnz .16E                     ;       if (0 == lines) {
+    54                              <1> 
+    55 0000035B 68[FF03]E85FFD83C4- <1>     cdecl puts, .s2             ;       // 中断メッセージを表示
+    55 00000363 02                  <1>
+    56 00000364 B410                <1>     mov ah, 0x10
+    57 00000366 CD16                <1>     int 0x16                    ;           AL = BIOS(0x16, 0x10);
+    58                              <1> 
+    59 00000368 68[0A04]E852FD83C4- <1>     cdecl puts, .s3             ;       }
+    59 00000370 02                  <1>
+    60                              <1>     .16E:                       ;   }
+    61                              <1> 
+    62 00000371 6683FB00            <1>     cmp ebx, 0                  ; } while (0 == EBX);
+    63 00000375 7593                <1>     jne .10L                    ;
+    64                              <1> 
+    65                              <1>     .10E:
+    66 00000377 68[CF03]E843FD83C4- <1>     cdecl puts, .s1
+    66 0000037F 02                  <1>
+    67                              <1> 
+    68                              <1>     ;; レジスタの復帰
+    69 00000380 5D                  <1>     pop		bp
+    70 00000381 5F                  <1> 	pop		di
+    71 00000382 5E                  <1> 	pop		si
+    72 00000383 665A                <1> 	pop		edx
+    73 00000385 6659                <1> 	pop		ecx
+    74 00000387 665B                <1> 	pop		ebx
+    75 00000389 6658                <1> 	pop		eax
+    76                              <1> 
+    77 0000038B C3                  <1> 	ret
+    78                              <1> 
+    79 0000038C 2045383230204D656D- <1>     .s0:	db " E820 Memory Map:", 0x0A, 0x0D
+    79 00000395 6F7279204D61703A0A- <1>
+    79 0000039E 0D                  <1>
+    80 0000039F 20426173655F5F5F5F- <1> 	db " Base_____________ Length___________ Type____", 0x0A, 0x0D, 0
+    80 000003A8 5F5F5F5F5F5F5F5F5F- <1>
+    80 000003B1 204C656E6774685F5F- <1>
+    80 000003BA 5F5F5F5F5F5F5F5F5F- <1>
+    80 000003C3 20547970655F5F5F5F- <1>
+    80 000003CC 0A0D00              <1>
+    81 000003CF 202D2D2D2D2D2D2D2D- <1>     .s1:	db " ----------------- ----------------- --------", 0x0A, 0x0D, 0
+    81 000003D8 2D2D2D2D2D2D2D2D2D- <1>
+    81 000003E1 202D2D2D2D2D2D2D2D- <1>
+    81 000003EA 2D2D2D2D2D2D2D2D2D- <1>
+    81 000003F3 202D2D2D2D2D2D2D2D- <1>
+    81 000003FC 0A0D00              <1>
+    82 000003FF 203C6D6F72652E2E2E- <1>     .s2:	db " <more...>", 0
+    82 00000408 3E00                <1>
+    83 0000040A 0D2020202020202020- <1>     .s3:	db 0x0D, "          ", 0x0D, 0
+    83 00000413 20200D00            <1>
+    84                              <1> 
+    85 00000417 00                  <1>     ALIGN 4, db 0
+    86 00000418 00<rept>            <1>     .b0:	times E820_RECORD_SIZE db 0
+    87                              <1> 
+    88                              <1> ;;;
+    89                              <1> ;;; メモリ情報の表示
+    90                              <1> ;;;
+    91                              <1> ;************************************************************************
+    92                              <1> ;	メモリ情報の表示
+    93                              <1> ;========================================================================
+    94                              <1> ;■書式		: void put_mem_info(adr);
+    95                              <1> ;
+    96                              <1> ;■引数
+    97                              <1> ;	adr		: メモリ情報を参照するアドレス
+    98                              <1> ;
+    99                              <1> ;■戻り値;	: 無し
+   100                              <1> ;************************************************************************
+   101                              <1> put_mem_info:
+   102                              <1> 		;---------------------------------------
+   103                              <1> 		; 【スタックフレームの構築】
+   104                              <1> 		;---------------------------------------
+   105                              <1> 												;    + 4| バッファアドレス
+   106                              <1> 												;    + 2| IP（戻り番地）
+   107 0000042C 55                  <1> 		push	bp								;  BP+ 0| BP（元の値）
+   108 0000042D 89E5                <1> 		mov		bp, sp							; ------+--------
+   109                              <1> 
+   110                              <1> 		;---------------------------------------
+   111                              <1> 		; 【レジスタの保存】
+   112                              <1> 		;---------------------------------------
+   113 0000042F 53                  <1> 		push	bx
+   114 00000430 56                  <1> 		push	si
+   115                              <1> 
+   116                              <1> 		;---------------------------------------
+   117                              <1> 		; 引数を取得
+   118                              <1> 		;---------------------------------------
+   119 00000431 8B7604              <1> 		mov		si, [bp + 4]					; SI = バッファアドレス;
+   120                              <1> 
+   121                              <1> 		;---------------------------------------
+   122                              <1> 		; レコードの表示
+   123                              <1> 		;---------------------------------------
+   124                              <1> 
+   125                              <1> 		; Base(64bit)
+   126 00000434 6A046A106A0468-     <1> 		cdecl	itoa, word [si + 6], .p2 + 0, 4, 16, 0b0100
+   126 0000043B [0B05]FF7406E8C9FD- <1>
+   126 00000443 83C40A              <1>
+   127 00000446 6A046A106A0468-     <1> 		cdecl	itoa, word [si + 4], .p2 + 4, 4, 16, 0b0100
+   127 0000044D [0F05]FF7404E8B7FD- <1>
+   127 00000455 83C40A              <1>
+   128 00000458 6A046A106A0468-     <1> 		cdecl	itoa, word [si + 2], .p3 + 0, 4, 16, 0b0100
+   128 0000045F [1405]FF7402E8A5FD- <1>
+   128 00000467 83C40A              <1>
+   129 0000046A 6A046A106A0468-     <1> 		cdecl	itoa, word [si + 0], .p3 + 4, 4, 16, 0b0100
+   129 00000471 [1805]FF34E894FD83- <1>
+   129 00000479 C40A                <1>
+   130                              <1> 
+   131                              <1> 		; Length(64bit)
+   132 0000047B 6A046A106A0468-     <1> 		cdecl	itoa, word [si +14], .p4 + 0, 4, 16, 0b0100
+   132 00000482 [1D05]FF740EE882FD- <1>
+   132 0000048A 83C40A              <1>
+   133 0000048D 6A046A106A0468-     <1> 		cdecl	itoa, word [si +12], .p4 + 4, 4, 16, 0b0100
+   133 00000494 [2105]FF740CE870FD- <1>
+   133 0000049C 83C40A              <1>
+   134 0000049F 6A046A106A0468-     <1> 		cdecl	itoa, word [si +10], .p5 + 0, 4, 16, 0b0100
+   134 000004A6 [2605]FF740AE85EFD- <1>
+   134 000004AE 83C40A              <1>
+   135 000004B1 6A046A106A0468-     <1> 		cdecl	itoa, word [si + 8], .p5 + 4, 4, 16, 0b0100
+   135 000004B8 [2A05]FF7408E84CFD- <1>
+   135 000004C0 83C40A              <1>
+   136                              <1> 
+   137                              <1> 		; Type(32bit)
+   138 000004C3 6A046A106A0468-     <1> 		cdecl	itoa, word [si +18], .p6 + 0, 4, 16, 0b0100
+   138 000004CA [2F05]FF7412E83AFD- <1>
+   138 000004D2 83C40A              <1>
+   139 000004D5 6A046A106A0468-     <1> 		cdecl	itoa, word [si +16], .p6 + 4, 4, 16, 0b0100
+   139 000004DC [3305]FF7410E828FD- <1>
+   139 000004E4 83C40A              <1>
+   140                              <1> 
+   141 000004E7 68[0A05]E8D3FB83C4- <1> 		cdecl	puts, .s1						;   // レコード情報を表示
+   141 000004EF 02                  <1>
+   142                              <1> 
+   143 000004F0 8B5C10              <1> 		mov		bx, [si +16]					;   // タイプを文字列で表示
+   144 000004F3 83E307              <1> 		and		bx, 0x07						;   BX  = Type(0〜5)
+   145 000004F6 D1E3                <1> 		shl		bx, 1							;   BX *= 2;   // 要素サイズに変換
+   146 000004F8 81C3[8C05]          <1> 		add		bx, .t0							;   BX += .t0; // テーブルの先頭アドレスを加算
+   147 000004FC FF37E8BFFB83C402    <1> 		cdecl	puts, word [bx]					;   puts(*BX);
+   148                              <1> 
+   149                              <1> 		;---------------------------------------
+   150                              <1> 		; 【レジスタの復帰】
+   151                              <1> 		;---------------------------------------
+   152 00000504 5E                  <1> 		pop		si
+   153 00000505 5B                  <1> 		pop		bx
+   154                              <1> 
+   155                              <1> 		;---------------------------------------
+   156                              <1> 		; 【スタックフレームの破棄】
+   157                              <1> 		;---------------------------------------
+   158 00000506 89EC                <1> 		mov		sp, bp
+   159 00000508 5D                  <1> 		pop		bp
+   160                              <1> 
+   161 00000509 C3                  <1> 		ret;
+   162                              <1> 
+   163 0000050A 20                  <1> .s1:	db " "
+   164 0000050B 5A5A5A5A5A5A5A5A5F  <1> .p2:	db "ZZZZZZZZ_"
+   165 00000514 5A5A5A5A5A5A5A5A20  <1> .p3:	db "ZZZZZZZZ "
+   166 0000051D 5A5A5A5A5A5A5A5A5F  <1> .p4:	db "ZZZZZZZZ_"
+   167 00000526 5A5A5A5A5A5A5A5A20  <1> .p5:	db "ZZZZZZZZ "
+   168 0000052F 5A5A5A5A5A5A5A5A00  <1> .p6:	db "ZZZZZZZZ", 0
+   169                              <1> 
+   170 00000538 2028556E6B6E6F776E- <1> .s4:	db " (Unknown)", 0x0A, 0x0D, 0
+   170 00000541 290A0D00            <1>
+   171 00000545 2028757361626C6529- <1> .s5:	db " (usable)", 0x0A, 0x0D, 0
+   171 0000054E 0A0D00              <1>
+   172 00000551 202872657365727665- <1> .s6:	db " (reserved)", 0x0A, 0x0D, 0
+   172 0000055A 64290A0D00          <1>
+   173 0000055F 202841435049206461- <1> .s7:	db " (ACPI data)", 0x0A, 0x0D, 0
+   173 00000568 7461290A0D00        <1>
+   174 0000056E 202841435049204E56- <1> .s8:	db " (ACPI NVS)", 0x0A, 0x0D, 0
+   174 00000577 53290A0D00          <1>
+   175 0000057C 2028626164206D656D- <1> .s9:	db " (bad memory)", 0x0A, 0x0D, 0
+   175 00000585 6F7279290A0D00      <1>
+   176                              <1> 
+   177 0000058C [3805][4505][5105]- <1> .t0:	dw .s4, .s5, .s6, .s7, .s8, .s9, .s4, .s4
+   177 00000592 [5F05][6E05][7C05]- <1>
+   177 00000598 [3805][3805]        <1>
+    96                                      %include "../modules/real/kbc.s"
+     1                              <1> ;;; KBC バッファ書き込み関数
+     2                              <1> ;;; @fn bool KBC_Data_Write(data);
+     3                              <1> ;;; @param (data) 書き込みデータ
+     4                              <1> ;;; @return 0(failure) others(success)
+     5                              <1> 
+     6                              <1> KBC_Data_Write:
+     7                              <1>     ;; START
+     8 0000059C 55                  <1>     push bp                     ;   + 4| data
+     9 0000059D 89E5                <1>     mov bp, sp                  ;   + 2| IP
+    10                              <1>                                 ; BP+ 0| BP
+    11                              <1>                                 ; -----+------
+    12                              <1> 
+    13 0000059F 51                  <1>     push cx
+    14                              <1> 
+    15                              <1>     ;; BODY
+    16 000005A0 B90000              <1>     mov cx, 0                   ; CX = 0; //max_cnt_num
+    17                              <1> 
+    18                              <1>     .10L:                       ; do {
+    19 000005A3 E464                <1>     in al, 0x64                 ;   AL = inp(0x64); //KBC status
+    20 000005A5 A802                <1>     test al, 0x02               ;   ZF = AL & 0x02; //writable?
+    21 000005A7 E0FA                <1>     loopnz .10L                 ; } while (--CX && !ZF);
+    22                              <1> 
+    23 000005A9 83F900              <1>     cmp cx, 0                   ; if (CX) {
+    24 000005AC 7405                <1>     jz .20E                     ;   // 未タイムアウト
+    25                              <1> 
+    26 000005AE 8A4604              <1>     mov al, [bp + 4]            ;   AL = data;
+    27 000005B1 E660                <1>     out 0x60, al                ;   outp(0x60, AL);
+    28                              <1> 
+    29                              <1>     .20E:                       ; }
+    30 000005B3 89C8                <1>     mov ax, cx                  ; return CX;
+    31                              <1> 
+    32                              <1> 
+    33                              <1>     ;; FINISH
+    34 000005B5 59                  <1>     pop cx
+    35                              <1> 
+    36 000005B6 89EC                <1>     mov sp, bp
+    37 000005B8 5D                  <1>     pop bp
+    38                              <1> 
+    39 000005B9 C3                  <1>     ret
+    40                              <1> 
+    41                              <1> ;;; KBCバッファ読み込み関数
+    42                              <1> ;;; @fn bool KBC_Data_Read(data);
+    43                              <1> ;;; @param (data) 読み込みデータ格納アドレス
+    44                              <1> ;;; @return 0(failure), others(success)
+    45                              <1> 
+    46                              <1> KBC_Data_Read:
+    47                              <1>     ;; START
+    48 000005BA 55                  <1>     push bp                     ;   + 4| data
+    49 000005BB 89E5                <1>     mov bp, sp                  ;   + 2| IP
+    50                              <1>                                 ; BP+ 0| BP
+    51                              <1>                                 ; -----+------
+    52                              <1> 
+    53 000005BD 51                  <1>     push cx
+    54 000005BE 57                  <1>     push di
+    55                              <1> 
+    56                              <1>     ;; BODY
+    57 000005BF B90000              <1>     mov cx, 0                   ; CX = 0; //max_cnt_num
+    58                              <1> 
+    59                              <1>     .10L:                       ; do {
+    60 000005C2 E464                <1>     in al, 0x64                 ;   AL = inp(0x64); //KBC status
+    61 000005C4 A801                <1>     test al, 0x01               ;   ZF = AL & 0x01; //readable?
+    62 000005C6 E1FA                <1>     loopz .10L                 ; } while (--CX && !ZF);
+    63                              <1> 
+    64 000005C8 83F900              <1>     cmp cx, 0                   ; if (CX) {
+    65 000005CB 7409                <1>     jz .20E                     ;   // 未タイムアウト
+    66                              <1> 
+    67 000005CD B400                <1>     mov ah, 0x00                ;   AH = 0x00;
+    68 000005CF E460                <1>     in al, 0x60                 ;   AL = inp(0x60);
+    69                              <1> 
+    70 000005D1 8B7E04              <1>     mov di, [bp + 4]            ;   DI = ptr;
+    71 000005D4 8905                <1>     mov [di + 0], ax            ;   DI[0] = AX;
+    72                              <1> 
+    73                              <1>     .20E:                       ; }
+    74 000005D6 89C8                <1>     mov ax, cx                  ; return CX;
+    75                              <1> 
+    76                              <1>     ;; FINISH
+    77 000005D8 5F                  <1>     pop di
+    78 000005D9 59                  <1>     pop cx
+    79                              <1> 
+    80 000005DA 89EC                <1>     mov sp, bp
+    81 000005DC 5D                  <1>     pop bp
+    82                              <1> 
+    83 000005DD C3                  <1>     ret
+    84                              <1> 
+    85                              <1> ;;; KBCコマンド書き込み関数
+    86                              <1> ;;; @fn bool KBC_Cmd_write(cmd);
+    87                              <1> ;;; @param (cmd) command
+    88                              <1> ;;; @return 0(failure), others(success)
+    89                              <1> 
+    90                              <1> KBC_Cmd_Write:
+    91                              <1>     ;; START
+    92 000005DE 55                  <1>     push bp                     ;   + 4| data
+    93 000005DF 89E5                <1>     mov bp, sp                  ;   + 2| IP
+    94                              <1>                                 ; BP+ 0| BP
+    95                              <1>                                 ; -----+------
+    96                              <1> 
+    97 000005E1 51                  <1>     push cx
+    98                              <1> 
+    99                              <1>     ;; BODY
+   100 000005E2 B90000              <1>     mov cx, 0                   ; CX = 0; //max_cnt_num
+   101                              <1> 
+   102                              <1>     .10L:                       ; do {
+   103 000005E5 E464                <1>     in al, 0x64                 ;   AL = inp(0x64); //KBC status
+   104 000005E7 A802                <1>     test al, 0x02               ;   ZF = AL & 0x02; //writable?
+   105 000005E9 E0FA                <1>     loopnz .10L                 ; } while (--CX && !ZF);
+   106                              <1> 
+   107 000005EB 83F900              <1>     cmp cx, 0                   ; if (CX) {
+   108 000005EE 7405                <1>     jz .20E                     ;   // 未タイムアウト
+   109                              <1> 
+   110 000005F0 8A4604              <1>     mov al, [bp + 4]            ;   AL = command;
+   111 000005F3 E664                <1>     out 0x64, al                ;   outp(0x60, AL);
+   112                              <1> 
+   113                              <1>     .20E:                       ; }
+   114 000005F5 89C8                <1>     mov ax, cx                  ; return CX;
+   115                              <1> 
+   116                              <1> 
+   117                              <1>     ;; FINISH
+   118 000005F7 59                  <1>     pop cx
+   119                              <1> 
+   120 000005F8 89EC                <1>     mov sp, bp
+   121 000005FA 5D                  <1>     pop bp
+   122                              <1> 
+   123 000005FB C3                  <1>     ret
+    97                                  ;;;
+    98                                  ;;; ブート処理の第2ステージ
+    99                                  ;;;
+   100                                  stage_2:
+   101                                      ;; 文字列を表示
+   102 000005FC 68[7606]E8BEFA83C4-         cdecl puts, .s0             ; puts(.s0);
+   102 00000604 02                 
+   103                                  
+   104                                      ;; ドライブ情報を取得
+   105 00000605 68[B800]E881FC83C4-         cdecl get_drive_param, BOOT ; get_drive_param(DX, BOOT.CYLN);
+   105 0000060D 02                 
+   106 0000060E 83F800                      cmp ax, 0                   ; if (0 == AX)
+   107                                                                  ; {
+   108                                      .10Q:                       ;
+   109 00000611 750C                        jne .10E                    ;
+   110                                                                  ;
+   111                                      .10T:                       ;
+   112 00000613 68[AD06]E8A7FA83C4-         cdecl puts, .e0             ;   puts(.e0);
+   112 0000061B 02                 
+   113 0000061C E8C0FA                      call reboot                 ;   reboot();
+   114                                                                  ; }
+   115                                      .10E:                       ;
+   116                                  
+   117                                      ;; ドライブ情報を表示
+   118 0000061F A1[B800]                    mov ax, [BOOT + drive.no]
+   119 00000622 6A046A106A0268-             cdecl itoa, ax, .p1, 2, 16, 0b0100
+   119 00000629 [8E06]50E8DDFB83C4-
+   119 00000631 0A                 
+   120 00000632 A1[BA00]                    mov ax, [BOOT + drive.cyln]
+   121 00000635 6A046A106A0468-             cdecl itoa, ax, .p2, 4, 16, 0b0100
+   121 0000063C [9606]50E8CAFB83C4-
+   121 00000644 0A                 
+   122 00000645 A1[BC00]                    mov ax, [BOOT + drive.head]
+   123 00000648 6A046A106A0268-             cdecl itoa, ax, .p3, 2, 16, 0b0100
+   123 0000064F [A006]50E8B7FB83C4-
+   123 00000657 0A                 
+   124 00000658 A1[BE00]                    mov ax, [BOOT + drive.sect]
+   125 0000065B 6A046A106A0268-             cdecl itoa, ax, .p4, 2, 16, 0b0100
+   125 00000662 [A806]50E8A4FB83C4-
+   125 0000066A 0A                 
+   126 0000066B 68[8506]E84FFA83C4-         cdecl puts, .s1
+   126 00000673 02                 
+   127                                  
+   128                                      ;; 処理の終了
+   129 00000674 EB4F                        jmp stage_3rd                       ; while (1);
+   130                                  
+   131                                      ;; データ
+   132 00000676 326E64207374616765-         .s0 db "2nd stage...", 0x0A, 0x0D, 0
+   132 0000067F 2E2E2E0A0D00       
+   133                                  
+   134 00000685 2044726976653A3078          .s1 db " Drive:0x"
+   135 0000068E 20202C20433A3078            .p1 db "  , C:0x"
+   136 00000696 202020202C20483A30-         .p2 db "    , H:0x"
+   136 0000069F 78                 
+   137 000006A0 20202C20533A3078            .p3 db "  , S:0x"
+   138 000006A8 20200A0D00                  .p4 db "  ", 0x0A, 0x0D, 0
+   139                                  
+   140 000006AD 43616E277420676574-         .e0 db "Can't get drive number.", 0
+   140 000006B6 206472697665206E75-
+   140 000006BF 6D6265722E00       
+   141                                  
+   142                                  ;;;
+   143                                  ;;; ブート処理の第3ステージ
+   144                                  ;;;
+   145                                  stage_3rd:
+   146                                      ;; 文字列を表示
+   147 000006C5 68[4207]E8F5F983C4-         cdecl puts, .s0
+   147 000006CD 02                 
+   148                                  
+   149                                      ;; プロテクトモードで使用するフォントは，BIOSに内蔵されたものを流用する
+   150 000006CE 68[0002]E8F9FB83C4-         cdecl get_font_adr, FONT    ; BIOSのフォントを取得
+   150 000006D6 02                 
+   151                                  
+   152                                      ;; フォントアドレスの表示
+   153 000006D7 6A046A106A0468-             cdecl itoa, word [FONT.seg], .p1, 4, 16, 0b0100
+   153 000006DE [5F07]FF36[0002]E8-
+   153 000006E5 25FB83C40A         
+   154 000006EA 6A046A106A0468-             cdecl itoa, word [FONT.off], .p2, 4, 16, 0b0100
+   154 000006F1 [6407]FF36[0202]E8-
+   154 000006F8 12FB83C40A         
+   155 000006FD 68[5107]E8BDF983C4-         cdecl puts, .s1
+   155 00000705 02                 
+   156                                  
+   157                                      ;; メモリ情報の取得と表示
+   158 00000706 E8E4FB                      cdecl get_mem_info          ; get_mem_inf();
+   159                                  
+   160 00000709 66A1[0402]                  mov eax, [ACPI_DATA.adr]    ; EAX = ACPI.adr;
+   161 0000070D 6683F800                    cmp eax, 0                  ; if (EAX) {
+   162 00000711 742D                        je .10E
+   163                                  
+   164 00000713 6A046A106A0468-             cdecl itoa, ax, .p4, 4, 16, 0b0100 ; itoa(AX); 下位アドレスを変換
+   164 0000071A [7D07]50E8ECFA83C4-
+   164 00000722 0A                 
+   165 00000723 66C1E810                    shr eax, 16                        ; EAX >>= 16;
+   166 00000727 6A046A106A0468-             cdecl itoa, ax, .p3, 4, 16, 0b0100 ; itoa(AX); 上位アドレスを変換
+   166 0000072E [7907]50E8D8FA83C4-
+   166 00000736 0A                 
+   167                                  
+   168 00000737 68[6E07]E883F983C4-         cdecl puts, .s2
+   168 0000073F 02                 
+   169                                      .10E:
+   170                                      ;; 処理の終了
+   171 00000740 EB42                        jmp stage_4                ; goto stage_4
+   172                                  
+   173                                      ;; data
+   174 00000742 337264207374616765-         .s0: db "3rd stage...", 0x0A, 0x0D, 0
+   174 0000074B 2E2E2E0A0D00       
+   175                                  
+   176 00000751 20466F6E7420416464-         .s1: db " Font Address="
+   176 0000075A 726573733D         
+   177 0000075F 5A5A5A5A3A                  .p1: db "ZZZZ:"
+   178 00000764 5A5A5A5A0A0D00              .p2: db "ZZZZ", 0x0A, 0x0D, 0
+   179 0000076B 0A0D00                      db 0x0A, 0x0D, 0
+   180                                  
+   181 0000076E 204143504920646174-         .s2:	db	" ACPI data="
+   181 00000777 613D               
+   182 00000779 5A5A5A5A                    .p3:	db	"ZZZZ"
+   183 0000077D 5A5A5A5A0A0D00              .p4:	db	"ZZZZ", 0x0A, 0x0D, 0
+   184                                  
+   185                                  ;;;
+   186                                  ;;; ブート処理の第4ステージ
+   187                                  ;;;
+   188                                  stage_4:
+   189                                      ;; 文字列を表示
+   190 00000784 68[D507]E836F983C4-         cdecl puts, .s0
+   190 0000078C 02                 
+   191                                  
+   192                                      ;; A20ゲートの有効化
+   193 0000078D FA                          cli                            ; // 割り込み禁止
+   194                                  
+   195 0000078E 68AD00E84AFE83C402          cdecl KBC_Cmd_Write, 0xAD       ; // キーボード無効化
+   196                                  
+   197 00000797 68D000E841FE83C402          cdecl KBC_Cmd_Write, 0xD0   ; // 出力ポート読み出しコマンド
+   198 000007A0 68[F907]E814FE83C4-         cdecl KBC_Data_Read, .key   ; // 出力ポートデータ
+   198 000007A8 02                 
+   199                                  
+   200 000007A9 8A1E[F907]                  mov bl, [.key]              ; BL = key;
+   201 000007AD 80CB02                      or bl, 0x02                 ; BL |= 0x02;
+   202                                  
+   203 000007B0 68D100E828FE83C402          cdecl KBC_Cmd_Write, 0xD1   ; // 出力ポート書き込みコマンド
+   204 000007B9 53E8DFFD83C402              cdecl KBC_Data_Write, bx    ;// 出力ポートデータ
+   205                                  
+   206 000007C0 68AE00E818FE83C402          cdecl KBC_Cmd_Write, 0xAE   ; // キーボード有効化
+   207                                  
+   208 000007C9 FB                          sti                         ; 割り込み許可
+   209                                  
+   210                                      ;; 文字列を表示
+   211 000007CA 68[E407]E8F0F883C4-         cdecl puts, .s1
+   211 000007D2 02                 
+   212                                  
+   213                                      ;; 処理の終了
+   214 000007D3 EBFE                        jmp $                       ; while (1);
+   215                                  
+   216                                      ;; // data
+   217 000007D5 347468207374616765-         .s0:	db	"4th stage...", 0x0A, 0x0D, 0
+   217 000007DE 2E2E2E0A0D00       
+   218 000007E4 204132302047617465-         .s1:	db	" A20 Gate Enabled.", 0x0A, 0x0D, 0
+   218 000007ED 20456E61626C65642E-
+   218 000007F6 0A0D00             
+   219                                  
+   220 000007F9 0000                        .key:	dw	0
+   221                                  ;;;
+   222                                  ;;; パディング(このファイルは 8K byte とする)
+   223                                  ;;;
+   224 000007FB 00<rept>                    times BOOT_SIZE - ($ - $$) db 0 ; padding
