@@ -1,0 +1,42 @@
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+                0x0000000000101000                . = 0x101000
+
+.text           0x0000000000101000        0x2
+                0x0000000000101000                _text_start = .
+ *(.text)
+ .text          0x0000000000101000        0x2 kernel.o
+                0x0000000000101000                kernel_entry
+                0x0000000000101002                _text_end = .
+
+.rodata         0x0000000000101002        0x0
+                0x0000000000101002                _rodata_start = .
+ *(.rodata)
+                0x0000000000101002                _rodata_end = .
+
+.eh_frame       0x0000000000101004       0x2c
+ .eh_frame      0x0000000000101004       0x2c kernel.o
+
+.data           0x0000000000101030        0x0
+                0x0000000000101030                _data_start = .
+ *(.data)
+ .data          0x0000000000101030        0x0 kernel.o
+                0x0000000000101030                _data_end = .
+
+.bss            0x0000000000101030        0x0
+                0x0000000000101030                _bss_start = .
+ *(.bss)
+ .bss           0x0000000000101030        0x0 kernel.o
+                0x0000000000101030                _bss_end = .
+                0x0000000000103000                . = 0x103000
+LOAD kernel.o
+OUTPUT(KImage binary)
+
+.comment        0x0000000000000000       0x12
+ .comment       0x0000000000000000       0x12 kernel.o
